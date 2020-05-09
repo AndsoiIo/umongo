@@ -137,46 +137,6 @@ def _collect_indexes(meta, schema_nmspc, bases, is_child):
     return indexes
 
 
-def _build_document_opts(instance, template, name, nmspc, bases, is_child):
-    embedded = not issubclass(template, DocumentTemplate)
-    base_opts_cls = EmbeddedDocumentOpts if embedded else DocumentOpts
-    base_impl_cls = EmbeddedDocumentImplementation if embedded else DocumentImplementation
-    kwargs = {}
-    meta = nmspc.get('Meta')
-    collection_name = getattr(meta, 'collection_name', None)
-    kwargs['instance'] = instance
-    kwargs['template'] = template
-    kwargs['abstract'] = getattr(meta, 'abstract', False)
-    kwargs['is_child'] = is_child
-    kwargs['strict'] = getattr(meta, 'strict', True)
-
-    # Handle option inheritance and integrity checks
-    for base in bases:
-        if not issubclass(base, base_impl_cls):
-            continue
-        popts = base.opts
-        if kwargs['abstract'] and not popts.abstract:
-            raise DocumentDefinitionError(
-                "Abstract document should have all it parents abstract")
-        if not embedded and popts.collection_name:
-            if collection_name:
-                raise DocumentDefinitionError(
-                    "Cannot redefine collection_name in a child, use abstract instead")
-            collection_name = popts.collection_name
-
-    if not embedded:
-        if collection_name:
-            if kwargs['abstract']:
-                raise DocumentDefinitionError(
-                    'Abstract document cannot define collection_name')
-        elif not kwargs['abstract']:
-            # Determine the collection name from the class name
-            collection_name = camel_to_snake(name)
-        kwargs['collection_name'] = collection_name
-
-    return base_opts_cls(**kwargs)
-
-
 class BaseBuilder:
     """
     A builder connect a :class:`umongo.document.Template` with a
@@ -237,6 +197,45 @@ class BaseBuilder:
         schema_nmspc['MA_BASE_SCHEMA_CLS'] = template.MA_BASE_SCHEMA_CLS
         return type('%sSchema' % template.__name__, schema_bases, schema_nmspc)
 
+    def _build_document_opts(self, template, bases, is_child):
+        embedded = not issubclass(template, DocumentTemplate)
+        base_opts_cls = EmbeddedDocumentOpts if embedded else DocumentOpts
+        base_impl_cls = EmbeddedDocumentImplementation if embedded else DocumentImplementation
+        kwargs = {}
+        meta = template.__dict__.get('Meta')
+        collection_name = getattr(meta, 'collection_name', None)
+        kwargs['instance'] = self.instance
+        kwargs['template'] = template
+        kwargs['abstract'] = getattr(meta, 'abstract', False)
+        kwargs['is_child'] = is_child
+        kwargs['strict'] = getattr(meta, 'strict', True)
+
+        # Handle option inheritance and integrity checks
+        for base in bases:
+            if not issubclass(base, base_impl_cls):
+                continue
+            popts = base.opts
+            if kwargs['abstract'] and not popts.abstract:
+                raise DocumentDefinitionError(
+                    "Abstract document should have all it parents abstract")
+            if not embedded and popts.collection_name:
+                if collection_name:
+                    raise DocumentDefinitionError(
+                        "Cannot redefine collection_name in a child, use abstract instead")
+                collection_name = popts.collection_name
+
+        if not embedded:
+            if collection_name:
+                if kwargs['abstract']:
+                    raise DocumentDefinitionError(
+                        'Abstract document cannot define collection_name')
+            elif not kwargs['abstract']:
+                # Determine the collection name from the class name
+                collection_name = camel_to_snake(template.__name__)
+            kwargs['collection_name'] = collection_name
+
+        return base_opts_cls(**kwargs)
+
     def build_from_template(self, template):
         """
         Generate a :class:`umongo.document.DocumentImplementation` for this
@@ -248,13 +247,15 @@ class BaseBuilder:
         is_child = _is_child(template, base_tmpl_cls)
         name = template.__name__
         bases = self._convert_bases(template.__bases__)
-        opts = _build_document_opts(
-            self.instance, template, name, template.__dict__, bases, is_child)
+        opts = self._build_document_opts(template, bases, is_child)
         nmspc, schema_fields, schema_non_fields = _collect_schema_attrs(template)
         nmspc['opts'] = opts
 
         # Create schema by retrieving inherited schema classes
-        schema_bases = tuple([base.Schema for base in bases if hasattr(base, 'Schema')])
+        schema_bases = tuple(
+            base.Schema for base in bases
+            if issubclass(base, Implementation) and hasattr(base, 'Schema')
+        )
         if not schema_bases:
             schema_bases = (Schema, )
         if not embedded:
