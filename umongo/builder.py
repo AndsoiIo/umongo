@@ -138,6 +138,9 @@ def _collect_indexes(meta, schema_nmspc, bases, is_child):
 
 
 def _build_document_opts(instance, template, name, nmspc, bases, is_child):
+    embedded = not issubclass(template, DocumentTemplate)
+    base_opts_cls = EmbeddedDocumentOpts if embedded else DocumentOpts
+    base_impl_cls = EmbeddedDocumentImplementation if embedded else DocumentImplementation
     kwargs = {}
     meta = nmspc.get('Meta')
     collection_name = getattr(meta, 'collection_name', None)
@@ -149,48 +152,29 @@ def _build_document_opts(instance, template, name, nmspc, bases, is_child):
 
     # Handle option inheritance and integrity checks
     for base in bases:
-        if not issubclass(base, DocumentImplementation):
+        if not issubclass(base, base_impl_cls):
             continue
         popts = base.opts
         if kwargs['abstract'] and not popts.abstract:
             raise DocumentDefinitionError(
                 "Abstract document should have all it parents abstract")
-        if popts.collection_name:
+        if not embedded and popts.collection_name:
             if collection_name:
                 raise DocumentDefinitionError(
                     "Cannot redefine collection_name in a child, use abstract instead")
             collection_name = popts.collection_name
 
-    if collection_name:
-        if kwargs['abstract']:
-            raise DocumentDefinitionError(
-                'Abstract document cannot define collection_name')
-    elif not kwargs['abstract']:
-        # Determine the collection name from the class name
-        collection_name = camel_to_snake(name)
+    if not embedded:
+        if collection_name:
+            if kwargs['abstract']:
+                raise DocumentDefinitionError(
+                    'Abstract document cannot define collection_name')
+        elif not kwargs['abstract']:
+            # Determine the collection name from the class name
+            collection_name = camel_to_snake(name)
+        kwargs['collection_name'] = collection_name
 
-    return DocumentOpts(collection_name=collection_name, **kwargs)
-
-
-def _build_embedded_document_opts(instance, template, name, nmspc, bases, is_child):
-    kwargs = {}
-    meta = nmspc.get('Meta')
-    kwargs['instance'] = instance
-    kwargs['template'] = template
-    kwargs['abstract'] = getattr(meta, 'abstract', False)
-    kwargs['is_child'] = is_child
-    kwargs['strict'] = getattr(meta, 'strict', True)
-
-    # Handle option inheritance and integrity checks
-    for base in bases:
-        if not issubclass(base, EmbeddedDocumentImplementation):
-            continue
-        popts = base.opts
-        if kwargs['abstract'] and not popts.abstract:
-            raise DocumentDefinitionError(
-                "Abstract embedded document should have all it parents abstract")
-
-    return EmbeddedDocumentOpts(**kwargs)
+    return base_opts_cls(**kwargs)
 
 
 class BaseBuilder:
@@ -264,14 +248,8 @@ class BaseBuilder:
         is_child = _is_child(template, base_tmpl_cls)
         name = template.__name__
         bases = self._convert_bases(template.__bases__)
-        if embedded:
-            opts = _build_embedded_document_opts(
-                self.instance, template, name, template.__dict__, bases, is_child
-            )
-        else:
-            opts = _build_document_opts(
-                self.instance, template, name, template.__dict__, bases, is_child
-            )
+        opts = _build_document_opts(
+            self.instance, template, name, template.__dict__, bases, is_child)
         nmspc, schema_fields, schema_non_fields = _collect_schema_attrs(template)
         nmspc['opts'] = opts
 
