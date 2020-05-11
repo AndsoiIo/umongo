@@ -36,6 +36,8 @@ class TestInheritance(BaseTest):
                 collection_name = 'parent_col'
 
         assert Parent.opts.abstract is False
+        assert Parent.opts.collection_name == 'parent_col'
+        assert Parent.collection.name == 'parent_col'
 
         @self.instance.register
         class Child(Parent):

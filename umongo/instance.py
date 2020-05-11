@@ -121,6 +121,14 @@ class BaseInstance:
         self._embedded_lookup[implementation.__name__] = implementation
         return implementation
 
+    def _register_mixin_doc(self, template):
+        implementation = self.builder.build_from_template(template)
+        if hasattr(self, implementation.__name__):
+            raise AlreadyRegisteredDocumentError(
+                'MixinDocument `%s` already registered' % implementation.__name__)
+        self._embedded_lookup[implementation.__name__] = implementation
+        return implementation
+
 
 class Instance(BaseInstance):
     """

@@ -15,10 +15,34 @@ from .data_proxy import data_proxy_factory
 from .document import DocumentTemplate, DocumentOpts, DocumentImplementation
 from .embedded_document import (
     EmbeddedDocumentTemplate, EmbeddedDocumentOpts, EmbeddedDocumentImplementation)
+from .mixin import MixinDocumentTemplate, MixinDocumentOpts, MixinDocumentImplementation
 from .exceptions import DocumentDefinitionError, NotRegisteredDocumentError
 from .schema import Schema
 from .indexes import parse_index
 from . import fields
+
+
+TEMPLATE_IMPLEMENTATION_MAPPING = {
+    DocumentTemplate: DocumentImplementation,
+    EmbeddedDocumentTemplate: EmbeddedDocumentImplementation,
+    MixinDocumentTemplate: MixinDocumentImplementation,
+}
+
+TEMPLATE_OPTIONS_MAPPING = {
+    DocumentTemplate: DocumentOpts,
+    EmbeddedDocumentTemplate: EmbeddedDocumentOpts,
+    MixinDocumentTemplate: MixinDocumentOpts,
+}
+
+
+def _get_base_template_cls(template):
+    if issubclass(template, DocumentTemplate):
+        return DocumentTemplate
+    if issubclass(template, EmbeddedDocumentTemplate):
+        return EmbeddedDocumentTemplate
+    if issubclass(template, MixinDocumentTemplate):
+        return MixinDocumentTemplate
+    assert False
 
 
 def camel_to_snake(name):
@@ -154,7 +178,8 @@ class BaseBuilder:
         self.instance = instance
         self._templates_lookup = {
             DocumentTemplate: self.BASE_DOCUMENT_CLS,
-            EmbeddedDocumentTemplate: EmbeddedDocumentImplementation
+            EmbeddedDocumentTemplate: EmbeddedDocumentImplementation,
+            MixinDocumentTemplate: MixinDocumentImplementation,
         }
 
     def _convert_bases(self, bases):
@@ -198,33 +223,36 @@ class BaseBuilder:
         return type('%sSchema' % template.__name__, schema_bases, schema_nmspc)
 
     def _build_document_opts(self, template, bases, is_child):
-        embedded = not issubclass(template, DocumentTemplate)
-        base_opts_cls = EmbeddedDocumentOpts if embedded else DocumentOpts
-        base_impl_cls = EmbeddedDocumentImplementation if embedded else DocumentImplementation
+        base_tmpl_cls = _get_base_template_cls(template)
+        base_impl_cls = TEMPLATE_IMPLEMENTATION_MAPPING[base_tmpl_cls]
+        base_opts_cls = TEMPLATE_OPTIONS_MAPPING[base_tmpl_cls]
         kwargs = {}
-        meta = template.__dict__.get('Meta')
-        collection_name = getattr(meta, 'collection_name', None)
         kwargs['instance'] = self.instance
         kwargs['template'] = template
-        kwargs['abstract'] = getattr(meta, 'abstract', False)
-        kwargs['is_child'] = is_child
-        kwargs['strict'] = getattr(meta, 'strict', True)
+        if base_tmpl_cls in (DocumentTemplate, EmbeddedDocumentTemplate):
+            meta = template.__dict__.get('Meta')
+            kwargs['abstract'] = getattr(meta, 'abstract', False)
+            kwargs['is_child'] = is_child
+            kwargs['strict'] = getattr(meta, 'strict', True)
+            if base_tmpl_cls is DocumentTemplate:
+                collection_name = getattr(meta, 'collection_name', None)
 
-        # Handle option inheritance and integrity checks
-        for base in bases:
-            if not issubclass(base, base_impl_cls):
-                continue
-            popts = base.opts
-            if kwargs['abstract'] and not popts.abstract:
-                raise DocumentDefinitionError(
-                    "Abstract document should have all it parents abstract")
-            if not embedded and popts.collection_name:
-                if collection_name:
+            # Handle option inheritance and integrity checks
+            for base in bases:
+                if not issubclass(base, base_impl_cls):
+                    continue
+                popts = base.opts
+                if kwargs['abstract'] and not popts.abstract:
                     raise DocumentDefinitionError(
-                        "Cannot redefine collection_name in a child, use abstract instead")
-                collection_name = popts.collection_name
+                        "Abstract document should have all it parents abstract")
+                if base_tmpl_cls is DocumentTemplate:
+                    if popts.collection_name:
+                        if collection_name:
+                            raise DocumentDefinitionError(
+                                "Cannot redefine collection_name in a child, use abstract instead")
+                        collection_name = popts.collection_name
 
-        if not embedded:
+        if base_tmpl_cls is DocumentTemplate:
             if collection_name:
                 if kwargs['abstract']:
                     raise DocumentDefinitionError(
@@ -241,14 +269,15 @@ class BaseBuilder:
         Generate a :class:`umongo.document.DocumentImplementation` for this
         instance from the given :class:`umongo.document.DocumentTemplate`.
         """
-        embedded = not issubclass(template, DocumentTemplate)
-        base_tmpl_cls = EmbeddedDocumentTemplate if embedded else DocumentTemplate
-        base_impl_cls = EmbeddedDocumentImplementation if embedded else DocumentImplementation
+        base_tmpl_cls = _get_base_template_cls(template)
+        base_impl_cls = TEMPLATE_IMPLEMENTATION_MAPPING[base_tmpl_cls]
         is_child = _is_child(template, base_tmpl_cls)
         name = template.__name__
         bases = self._convert_bases(template.__bases__)
-        opts = self._build_document_opts(template, bases, is_child)
         nmspc, schema_fields, schema_non_fields = _collect_schema_attrs(template)
+
+        # Build opts
+        opts = self._build_document_opts(template, bases, is_child)
         nmspc['opts'] = opts
 
         # Create schema by retrieving inherited schema classes
@@ -258,18 +287,20 @@ class BaseBuilder:
         )
         if not schema_bases:
             schema_bases = (Schema, )
-        if not embedded:
+        if base_tmpl_cls is DocumentTemplate:
             nmspc['pk_field'] = _on_need_add_id_field(schema_bases, schema_fields)
 
-        if is_child:
-            _add_child_field(name, schema_fields)
+        if base_tmpl_cls in (DocumentTemplate, EmbeddedDocumentTemplate):
+            if is_child:
+                _add_child_field(name, schema_fields)
         schema_cls = self._build_schema(template, schema_bases, schema_fields, schema_non_fields)
         nmspc['Schema'] = schema_cls
         schema = schema_cls()
         nmspc['schema'] = schema
-        nmspc['DataProxy'] = data_proxy_factory(name, schema, strict=opts.strict)
+        if base_tmpl_cls in (DocumentTemplate, EmbeddedDocumentTemplate):
+            nmspc['DataProxy'] = data_proxy_factory(name, schema, strict=opts.strict)
 
-        if not embedded:
+        if base_tmpl_cls is DocumentTemplate:
             # _build_document_opts cannot determine the indexes given we need to
             # visit the document's fields which weren't defined at this time
             opts.indexes = _collect_indexes(nmspc.get('Meta'), schema.fields, bases, is_child)
@@ -277,8 +308,9 @@ class BaseBuilder:
         implementation = type(name, bases, nmspc)
         self._templates_lookup[template] = implementation
         # Notify the parent & grand parents of the newborn !
-        for base in bases:
-            for parent in inspect.getmro(base):
-                if issubclass(parent, base_impl_cls) and parent is not base_impl_cls:
-                    parent.opts.offspring.add(implementation)
+        if base_tmpl_cls in (DocumentTemplate, EmbeddedDocumentTemplate):
+            for base in bases:
+                for parent in inspect.getmro(base):
+                    if issubclass(parent, base_impl_cls) and parent is not base_impl_cls:
+                        parent.opts.offspring.add(implementation)
         return implementation

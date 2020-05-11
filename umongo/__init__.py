@@ -28,6 +28,7 @@ from . import fields, validate
 from .schema import Schema
 from .data_objects import Reference
 from .embedded_document import EmbeddedDocument
+from .mixin import MixinDocument
 from .i18n import set_gettext
 
 
@@ -50,6 +51,7 @@ __all__ = (
     'post_dump',
     'validates_schema',
     'EmbeddedDocument',
+    'MixinDocument',
 
     'UMongoError',
     'ValidationError',

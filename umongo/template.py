@@ -44,7 +44,7 @@ class Implementation(metaclass=MetaImplementation):
     """
     @property
     def opts(self):
-        "An implementation must provide it configuration though this attribute."
+        "An implementation must provide its configuration though this attribute."
         raise NotImplementedError()
 
 

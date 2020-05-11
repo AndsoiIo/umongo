@@ -34,7 +34,7 @@ class EmbeddedDocumentOpts:
     """
     Configuration for an :class:`umongo.embedded_document.EmbeddedDocument`.
 
-    Should be passed as a Meta class to the :class:`Document`
+    Should be passed as a Meta class to the :class:`EmbeddedDocument`
 
     .. code-block:: python
 

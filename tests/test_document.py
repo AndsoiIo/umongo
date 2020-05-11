@@ -6,8 +6,10 @@ import pytest
 from bson import ObjectId, DBRef
 import marshmallow as ma
 
-from umongo import (Document, EmbeddedDocument, Schema, fields, exceptions,
-                    post_dump, pre_load, validates_schema)
+from umongo import (
+    Document, EmbeddedDocument, MixinDocument,
+    Schema, fields, exceptions, post_dump, pre_load, validates_schema
+)
 
 from .common import BaseTest
 
@@ -431,6 +433,120 @@ class TestDocument(BaseTest):
             del john['primary_key']
         with pytest.raises(exceptions.AlreadyCreatedError):
             john.update({'primary_key': ObjectId()})
+
+    def test_mixin(self):
+
+        @self.instance.register
+        class PMixin(MixinDocument):
+            pm = fields.IntField()
+
+        @self.instance.register
+        class CMixin(MixinDocument):
+            cm = fields.IntField()
+
+        @self.instance.register
+        class Parent(PMixin, Document):
+            p = fields.StrField()
+
+            class Meta:
+                allow_inheritance = True
+
+        @self.instance.register
+        class Child(CMixin, Parent):
+            c = fields.StrField()
+
+        assert set(Parent.schema.fields.keys()) == {'id', 'p', 'pm'}
+        assert set(Child.schema.fields.keys()) == {'id', 'cls', 'p', 'pm', 'c', 'cm'}
+
+        parent_data = {'p': 'parent', 'pm': 42}
+        child_data = {'c': 'child', 'cm': 12, **parent_data}
+
+        assert Parent(**parent_data).dump() == parent_data
+        assert Child(**child_data).dump() == {**child_data, 'cls': 'Child'}
+
+        parent = Parent()
+        parent.p = 'parent'
+        parent.pm = 42
+        assert parent.p == 'parent'
+        assert parent.pm == 42
+        assert parent.dump() == parent_data
+        del parent.p
+        del parent.pm
+        assert parent.p is None
+        assert parent.pm is None
+
+        parent = Parent()
+        parent['p'] = 'parent'
+        parent['pm'] = 42
+        assert parent['p'] == 'parent'
+        assert parent['pm'] == 42
+        assert parent.dump() == parent_data
+        del parent['p']
+        del parent['pm']
+        assert parent['p'] is None
+        assert parent['pm'] is None
+
+        child = Child()
+        child.c = 'child'
+        child.cm = 12
+        child.p = 'parent'
+        child.pm = 42
+        assert child.c == 'child'
+        assert child.cm == 12
+        assert child.dump() == {'cls': 'Child', **child_data}
+        del child.c
+        del child.cm
+        assert child.c is None
+        assert child.cm is None
+
+        child = Child()
+        child['c'] = 'child'
+        child['cm'] = 12
+        child['p'] = 'parent'
+        child['pm'] = 42
+        assert child['c'] == 'child'
+        assert child['cm'] == 12
+        assert child.dump() == {'cls': 'Child', **child_data}
+        del child['c']
+        del child['cm']
+        assert child['c'] is None
+        assert child['cm'] is None
+
+    def test_mixin_override(self):
+
+        @self.instance.register
+        class PMixin(MixinDocument):
+            pm = fields.IntField()
+
+        @self.instance.register
+        class CMixin(MixinDocument):
+            cm = fields.IntField()
+
+        @self.instance.register
+        class Parent(PMixin, Document):
+            p = fields.StrField()
+            pm = fields.IntField(validate=ma.validate.Range(0, 5))
+
+            class Meta:
+                allow_inheritance = True
+
+        @self.instance.register
+        class Child(CMixin, Parent):
+            c = fields.StrField()
+            cm = fields.IntField(validate=ma.validate.Range(0, 5))
+
+        assert set(Parent.schema.fields.keys()) == {'id', 'p', 'pm'}
+        assert set(Child.schema.fields.keys()) == {'id', 'cls', 'p', 'pm', 'c', 'cm'}
+
+        parent_data = {'p': 'parent', 'pm': 42}
+        child_data = {'c': 'Child', 'cm': 12, **parent_data}
+
+        with pytest.raises(ma.ValidationError) as exc:
+            Parent(**parent_data)
+        assert set(exc.value.messages.keys()) == {'pm'}
+        with pytest.raises(ma.ValidationError) as exc:
+            Child(**child_data)
+        assert set(exc.value.messages.keys()) == {'pm', 'cm'}
 
 
 class TestConfig(BaseTest):
